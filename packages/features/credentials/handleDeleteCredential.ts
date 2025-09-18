@@ -16,6 +16,7 @@ import { isPrismaObjOrUndefined } from "@calcom/lib/isPrismaObj";
 import { parseRecurringEvent } from "@calcom/lib/isRecurringEvent";
 import { DailyLocationType } from "@calcom/app-store/locations";
 import { getTranslation } from "@calcom/lib/server/i18n";
+import { defaultLocale as appDefaultLocale } from "@calcom/lib/i18n";
 import { bookingMinimalSelect, prisma } from "@calcom/prisma";
 import type { Prisma } from "@calcom/prisma/client";
 import { AppCategories, BookingStatus } from "@calcom/prisma/enums";
@@ -314,14 +315,14 @@ const handleDeleteCredential = async ({
                 email: attendee.email,
                 timeZone: attendee.timeZone,
                 language: {
-                  translate: await getTranslation(attendee.locale ?? "en", "common"),
-                  locale: attendee.locale ?? "en",
+                  translate: await getTranslation(attendee.locale ?? appDefaultLocale, "common"),
+                  locale: attendee.locale ?? appDefaultLocale,
                 },
               };
             });
 
             const attendeesList = await Promise.all(attendeesListPromises);
-            const tOrganizer = await getTranslation(booking?.user?.locale ?? "en", "common");
+            const tOrganizer = await getTranslation(booking?.user?.locale ?? appDefaultLocale, "common");
             await sendCancelledEmailsAndSMS(
               {
                 type: booking?.eventType?.title as string,
@@ -338,7 +339,7 @@ const handleDeleteCredential = async ({
                   email: booking?.userPrimaryEmail ?? (booking?.user?.email as string),
                   name: booking?.user?.name ?? "Nameless",
                   timeZone: booking?.user?.timeZone as string,
-                  language: { translate: tOrganizer, locale: booking?.user?.locale ?? "en" },
+                  language: { translate: tOrganizer, locale: booking?.user?.locale ?? appDefaultLocale },
                 },
                 attendees: attendeesList,
                 uid: booking.uid,

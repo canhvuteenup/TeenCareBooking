@@ -26,6 +26,7 @@ import { SENDER_ID, SENDER_NAME } from "@calcom/lib/constants";
 import { getBookerBaseUrl } from "@calcom/lib/getBookerUrl/server";
 import getOrgIdFromMemberOrTeamId from "@calcom/lib/getOrgIdFromMemberOrTeamId";
 import { getTeamIdFromEventType } from "@calcom/lib/getTeamIdFromEventType";
+import { defaultLocale as appDefaultLocale } from "@calcom/lib/i18n";
 import logger from "@calcom/lib/logger";
 import { getTranslation } from "@calcom/lib/server/i18n";
 import { WorkflowRepository } from "@calcom/lib/server/repository/workflow";
@@ -713,7 +714,7 @@ export async function scheduleBookingReminders(
   //create reminders for all bookings for each workflow step
   const promiseSteps = workflowSteps.map(async (step) => {
     const promiseScheduleReminders = bookings.map(async (booking) => {
-      const defaultLocale = "en";
+      const defaultLocale = appDefaultLocale;
       const bookingInfo = {
         uid: booking.uid,
         bookerUrl,

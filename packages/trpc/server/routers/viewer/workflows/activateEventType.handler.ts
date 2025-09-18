@@ -3,6 +3,7 @@ import { scheduleSMSReminder } from "@calcom/features/ee/workflows/lib/reminders
 import { scheduleWhatsappReminder } from "@calcom/features/ee/workflows/lib/reminders/whatsappReminderManager";
 import { PermissionCheckService } from "@calcom/features/pbac/services/permission-check.service";
 import { getBookerBaseUrl } from "@calcom/lib/getBookerUrl/server";
+import { defaultLocale as appDefaultLocale } from "@calcom/lib/i18n";
 import { WorkflowRepository } from "@calcom/lib/server/repository/workflow";
 import { getTimeFormatStringFromUserTimeFormat } from "@calcom/lib/timeFormat";
 import { prisma } from "@calcom/prisma";
@@ -317,7 +318,7 @@ export const activateEventTypeHandler = async ({ ctx, input }: ActivateEventType
       for (const booking of bookingsForReminders) {
         // eventTypeId is technically nullable but we know it will be there
         const bookingEventType = activeOnEventTypes.get(booking.eventTypeId!);
-        const defaultLocale = "en";
+        const defaultLocale = appDefaultLocale;
         const bookingInfo = {
           uid: booking.uid,
           bookerUrl,
