@@ -493,6 +493,7 @@ export async function getBookings({
                 "EventType.recurringEvent",
                 "EventType.currency",
                 "EventType.metadata",
+                "EventType.timeZone",
                 "EventType.disableGuests",
                 "EventType.seatsShowAttendees",
                 "EventType.seatsShowAvailabilityCount",

@@ -3,6 +3,7 @@ import short, { uuid } from "short-uuid";
 import { v5 as uuidv5 } from "uuid";
 
 import processExternalId from "@calcom/app-store/_utils/calendars/processExternalId";
+import { getPaymentAppData } from "@calcom/app-store/_utils/payments/getPaymentAppData";
 import { metadata as GoogleMeetMetadata } from "@calcom/app-store/googlevideo/_metadata";
 import {
   getLocationValueForDB,
@@ -16,6 +17,7 @@ import dayjs from "@calcom/dayjs";
 import { scheduleMandatoryReminder } from "@calcom/ee/workflows/lib/reminders/scheduleMandatoryReminder";
 import getICalUID from "@calcom/emails/lib/getICalUID";
 import { CalendarEventBuilder } from "@calcom/features/CalendarEventBuilder";
+import EventManager, { placeholderCreatedEvent } from "@calcom/features/bookings/lib/EventManager";
 import type { BookingDataSchemaGetter } from "@calcom/features/bookings/lib/dto/types";
 import type { CreateRegularBookingData, CreateBookingMeta } from "@calcom/features/bookings/lib/dto/types";
 import type { CheckBookingAndDurationLimitsService } from "@calcom/features/bookings/lib/handleNewBooking/checkBookingAndDurationLimits";
@@ -36,7 +38,6 @@ import {
   scheduleTrigger,
 } from "@calcom/features/webhooks/lib/scheduleTrigger";
 import { getVideoCallUrlFromCalEvent } from "@calcom/lib/CalEventParser";
-import EventManager, { placeholderCreatedEvent } from "@calcom/features/bookings/lib/EventManager";
 import { handleAnalyticsEvents } from "@calcom/lib/analyticsManager/handleAnalyticsEvents";
 import { groupHostsByGroupId } from "@calcom/lib/bookings/hostGroupUtils";
 import { shouldIgnoreContactOwner } from "@calcom/lib/bookings/routing/utils";
@@ -54,7 +55,6 @@ import { getErrorFromUnknown } from "@calcom/lib/errors";
 import { extractBaseEmail } from "@calcom/lib/extract-base-email";
 import { getBookerBaseUrl } from "@calcom/lib/getBookerUrl/server";
 import getOrgIdFromMemberOrTeamId from "@calcom/lib/getOrgIdFromMemberOrTeamId";
-import { getPaymentAppData } from "@calcom/app-store/_utils/payments/getPaymentAppData";
 import { getTeamIdFromEventType } from "@calcom/lib/getTeamIdFromEventType";
 import { HttpError } from "@calcom/lib/http-error";
 import type { CheckBookingLimitsService } from "@calcom/lib/intervalLimits/server/checkBookingLimits";
@@ -67,6 +67,7 @@ import { WorkflowRepository } from "@calcom/lib/server/repository/workflow";
 import { HashedLinkService } from "@calcom/lib/server/service/hashedLinkService";
 import { WorkflowService } from "@calcom/lib/server/service/workflows";
 import { getTimeFormatStringFromUserTimeFormat } from "@calcom/lib/timeFormat";
+import { DEFAULT_EVENT_TIME_ZONE } from "@calcom/lib/timezoneConstants";
 import type { PrismaClient } from "@calcom/prisma";
 import { prisma } from "@calcom/prisma";
 import type { DestinationCalendar, Prisma, User, AssignmentReasonEnum } from "@calcom/prisma/client";
@@ -345,6 +346,36 @@ export const buildEventForTeamEventType = async ({
   return teamEvt;
 };
 
+async function findAvailableRoundRobinOrganizer({
+  candidates,
+  startTimeUtc,
+  endTimeUtc,
+  rescheduleUid,
+}: {
+  candidates: IsFixedAwareUser[];
+  startTimeUtc: Date;
+  endTimeUtc: Date;
+  rescheduleUid: string | null;
+}) {
+  for (const candidate of candidates) {
+    const conflictingBooking = await prisma.booking.findFirst({
+      where: {
+        userId: candidate.id,
+        status: { in: [BookingStatus.ACCEPTED, BookingStatus.PENDING] },
+        startTime: { lt: endTimeUtc },
+        endTime: { gt: startTimeUtc },
+        ...(rescheduleUid ? { uid: { not: rescheduleUid } } : {}),
+      },
+      select: { id: true },
+    });
+
+    if (!conflictingBooking) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
 function buildTroubleshooterData({
   eventType,
 }: {
@@ -612,6 +643,17 @@ async function handler(
 
   const isTeamEventType =
     !!eventType.schedulingType && ["COLLECTIVE", "ROUND_ROBIN"].includes(eventType.schedulingType);
+  const user = eventType.users.find((user) => user.id === eventType.userId);
+  const userSchedule = user?.schedules.find((schedule) => schedule.id === user?.defaultScheduleId);
+  const eventTimeZone =
+    eventType.schedule?.timeZone ??
+    userSchedule?.timeZone ??
+    eventType.timeZone ??
+    DEFAULT_EVENT_TIME_ZONE;
+
+  const bookingTimeZone = reqBody.timeZone || eventTimeZone;
+
+
 
   loggerWithEventDetails.info(
     `Booking eventType ${eventTypeId} started`,
@@ -624,7 +666,7 @@ async function handler(
         endTime: reqBody.end,
         rescheduleUid: reqBody.rescheduleUid,
         location: location,
-        timeZone: reqBody.timeZone,
+        timeZone: bookingTimeZone,
       },
       isTeamEventType,
       eventType: getPiiFreeEventType(eventType),
@@ -639,13 +681,9 @@ async function handler(
     })
   );
 
-  const user = eventType.users.find((user) => user.id === eventType.userId);
-  const userSchedule = user?.schedules.find((schedule) => schedule.id === user?.defaultScheduleId);
-  const eventTimeZone = eventType.schedule?.timeZone ?? userSchedule?.timeZone;
-
   await validateBookingTimeIsNotOutOfBounds<typeof eventType>(
     reqBody.start,
-    reqBody.timeZone,
+    bookingTimeZone,
     eventType,
     eventTimeZone,
     loggerWithEventDetails
@@ -801,9 +839,9 @@ async function handler(
             await ensureAvailableUsers(
               { ...eventTypeWithUsers, users: [fixedUsers[key]] },
               {
-                dateFrom: dayjs(start).tz(reqBody.timeZone).format(),
-                dateTo: dayjs(end).tz(reqBody.timeZone).format(),
-                timeZone: reqBody.timeZone,
+                dateFrom: dayjs(start).tz(bookingTimeZone).format(),
+                dateTo: dayjs(end).tz(bookingTimeZone).format(),
+                timeZone: bookingTimeZone,
                 originalRescheduledBooking: originalRescheduledBooking ?? null,
               },
               loggerWithEventDetails,
@@ -815,9 +853,9 @@ async function handler(
           await ensureAvailableUsers(
             eventTypeWithUsers,
             {
-              dateFrom: dayjs(start).tz(reqBody.timeZone).format(),
-              dateTo: dayjs(end).tz(reqBody.timeZone).format(),
-              timeZone: reqBody.timeZone,
+              dateFrom: dayjs(start).tz(bookingTimeZone).format(),
+              dateTo: dayjs(end).tz(bookingTimeZone).format(),
+              timeZone: bookingTimeZone,
               originalRescheduledBooking,
             },
             loggerWithEventDetails,
@@ -832,9 +870,9 @@ async function handler(
         availableUsers = await ensureAvailableUsers(
           { ...eventTypeWithUsers, users: [...qualifiedRRUsers, ...fixedUsers] as IsFixedAwareUser[] },
           {
-            dateFrom: dayjs(reqBody.start).tz(reqBody.timeZone).format(),
-            dateTo: dayjs(reqBody.end).tz(reqBody.timeZone).format(),
-            timeZone: reqBody.timeZone,
+            dateFrom: dayjs(reqBody.start).tz(bookingTimeZone).format(),
+            dateTo: dayjs(reqBody.end).tz(bookingTimeZone).format(),
+            timeZone: bookingTimeZone,
             originalRescheduledBooking,
           },
           loggerWithEventDetails,
@@ -857,9 +895,9 @@ async function handler(
               users: [...additionalFallbackRRUsers, ...fixedUsers] as IsFixedAwareUser[],
             },
             {
-              dateFrom: dayjs(reqBody.start).tz(reqBody.timeZone).format(),
-              dateTo: dayjs(reqBody.end).tz(reqBody.timeZone).format(),
-              timeZone: reqBody.timeZone,
+              dateFrom: dayjs(reqBody.start).tz(bookingTimeZone).format(),
+              dateTo: dayjs(reqBody.end).tz(bookingTimeZone).format(),
+              timeZone: bookingTimeZone,
               originalRescheduledBooking,
             },
             loggerWithEventDetails,
@@ -961,9 +999,9 @@ async function handler(
                 await ensureAvailableUsers(
                   { ...eventTypeWithUsers, users: [newLuckyUser] },
                   {
-                    dateFrom: dayjs(start).tz(reqBody.timeZone).format(),
-                    dateTo: dayjs(end).tz(reqBody.timeZone).format(),
-                    timeZone: reqBody.timeZone,
+                    dateFrom: dayjs(start).tz(bookingTimeZone).format(),
+                    dateTo: dayjs(end).tz(bookingTimeZone).format(),
+                    timeZone: bookingTimeZone,
                     originalRescheduledBooking,
                   },
                   loggerWithEventDetails,
@@ -1045,9 +1083,30 @@ async function handler(
   }
 
   // If the team member is requested then they should be the organizer
-  const organizerUser = reqBody.teamMemberEmail
+  let organizerUser = reqBody.teamMemberEmail
     ? users.find((user) => user.email === reqBody.teamMemberEmail) ?? users[0]
     : users[0];
+
+  if (!reqBody.teamMemberEmail && eventType.schedulingType === SchedulingType.ROUND_ROBIN) {
+    const roundRobinCandidates = [
+      ...users,
+      ...availableUsers.filter((candidate) => !users.some((existing) => existing.id === candidate.id)),
+    ];
+
+    const selectedOrganizer = await findAvailableRoundRobinOrganizer({
+      candidates: roundRobinCandidates,
+      startTimeUtc: dayjs(reqBody.start).utc().toDate(),
+      endTimeUtc: dayjs(reqBody.end).utc().toDate(),
+      rescheduleUid: reqBody.rescheduleUid ?? null,
+    });
+
+    if (!selectedOrganizer) {
+      throw new HttpError({ statusCode: 409, message: "Slot is no longer available" });
+    }
+
+    organizerUser = selectedOrganizer;
+    users = [selectedOrganizer, ...users.filter((user) => user.id !== selectedOrganizer.id)];
+  }
 
   const tOrganizer = await getTranslation(organizerUser?.locale ?? "en", "common");
   const allCredentials = await getAllCredentialsIncludeServiceAccountKey(organizerUser, eventType);
@@ -1059,7 +1118,7 @@ async function handler(
       : null;
 
   const attendeeLanguage = attendeeInfoOnReschedule ? attendeeInfoOnReschedule.locale : language;
-  const attendeeTimezone = attendeeInfoOnReschedule ? attendeeInfoOnReschedule.timeZone : reqBody.timeZone;
+  const attendeeTimezone = attendeeInfoOnReschedule ? attendeeInfoOnReschedule.timeZone : bookingTimeZone;
 
   const tAttendees = await getTranslation(attendeeLanguage ?? "en", "common");
 
@@ -2437,3 +2496,4 @@ export class RegularBookingService implements IBookingService {
     return handler({ bookingData: input.bookingData, ...input.bookingMeta }, input.bookingDataSchemaGetter);
   }
 }
+

@@ -15,6 +15,7 @@ import { shouldIgnoreContactOwner } from "@calcom/lib/bookings/routing/utils";
 import { RESERVED_SUBDOMAINS } from "@calcom/lib/constants";
 import { buildDateRanges } from "@calcom/lib/date-ranges";
 import { getUTCOffsetByTimezone } from "@calcom/lib/dayjs";
+import { DEFAULT_EVENT_TIME_ZONE } from "@calcom/lib/timezoneConstants";
 import { getDefaultEvent } from "@calcom/lib/defaultEvents";
 import type { getBusyTimesService } from "@calcom/lib/di/containers/BusyTimes";
 import { getAggregatedAvailability } from "@calcom/lib/getAggregatedAvailability";
@@ -1008,13 +1009,16 @@ export class AvailableSlotsService {
       prefix: ["getAvailableSlots", `${eventType.id}:${input.usernameList}/${input.eventTypeSlug}`],
     });
 
+    const defaultEventTimeZone = DEFAULT_EVENT_TIME_ZONE;
+    const baseEventTimeZone = eventType.timeZone || eventType?.schedule?.timeZone || defaultEventTimeZone;
+    const effectiveBookerTimeZone = input.timeZone || baseEventTimeZone;
     const startTime = this.getStartTime(
       startTimeAdjustedForRollingWindowComputation,
-      input.timeZone,
+      effectiveBookerTimeZone,
       eventType.minimumBookingNotice
     );
     const endTime =
-      input.timeZone === "Etc/GMT" ? dayjs.utc(input.endTime) : dayjs(input.endTime).utc().tz(input.timeZone);
+      effectiveBookerTimeZone === "Etc/GMT" ? dayjs.utc(input.endTime) : dayjs(input.endTime).utc().tz(effectiveBookerTimeZone);
     // when an empty array is given we should prefer to have it handled as if this wasn't given at all
     // we don't want to return no availability in this case.
     const routedTeamMemberIds = input.routedTeamMemberIds ?? [];
@@ -1064,12 +1068,12 @@ export class AvailableSlotsService {
         // adjust start time so we can check for available slots in the first two weeks
         startTime:
           hasFallbackRRHosts && startTime.isBefore(twoWeeksFromNow)
-            ? this.getStartTime(dayjs().format(), input.timeZone, eventType.minimumBookingNotice)
+            ? this.getStartTime(dayjs().format(), effectiveBookerTimeZone, eventType.minimumBookingNotice)
             : startTime,
         // adjust end time so we can check for available slots in the first two weeks
         endTime:
           hasFallbackRRHosts && endTime.isBefore(twoWeeksFromNow)
-            ? this.getStartTime(twoWeeksFromNow.format(), input.timeZone, eventType.minimumBookingNotice)
+            ? this.getStartTime(twoWeeksFromNow.format(), effectiveBookerTimeZone, eventType.minimumBookingNotice)
             : endTime,
         bypassBusyCalendarTimes,
         silentCalendarFailures,
@@ -1173,7 +1177,7 @@ export class AvailableSlotsService {
         }
 
         const restrictionTimezone = eventType.useBookerTimezone
-          ? input.timeZone
+          ? effectiveBookerTimeZone
           : restrictionSchedule.timeZone!;
         const eventLength = input.duration || eventType.length;
 
@@ -1230,6 +1234,109 @@ export class AvailableSlotsService {
       eventLength: input.duration || eventType.length,
       currentSeats,
     };
+    const slotDurationInMinutes = Math.max(
+      typeof availabilityCheckProps.eventLength === "number" && availabilityCheckProps.eventLength > 0
+        ? availabilityCheckProps.eventLength
+        : eventType.length || 0,
+      1
+    );
+
+    const shouldComputeHostIds = eventType.schedulingType === SchedulingType.ROUND_ROBIN;
+    const availableHostsCache = new Map<string, number[]>();
+
+    const getAvailableHostIdsForSlot = (slotTime: dayjs.Dayjs) => {
+      if (!shouldComputeHostIds) {
+        return [];
+      }
+
+      const cacheKey = slotTime.toISOString();
+      const cached = availableHostsCache.get(cacheKey);
+      if (cached) {
+        return cached;
+      }
+
+      const slotStartUtc = slotTime.utc();
+      const slotEndUtc = slotStartUtc.add(slotDurationInMinutes, "minute");
+      const slotStartValue = slotStartUtc.valueOf();
+      const slotEndValue = slotEndUtc.valueOf();
+
+      const hostIds: number[] = [];
+
+      for (const availability of allUsersAvailability) {
+        const ranges =
+          (availability.oooExcludedDateRanges?.length
+            ? availability.oooExcludedDateRanges
+            : availability.dateRanges) ?? [];
+
+        let isWithinRange = false;
+        for (const range of ranges) {
+          const rangeStartValue = range.start.valueOf();
+          const rangeEndValue = range.end.valueOf();
+          if (slotStartValue >= rangeStartValue && slotEndValue <= rangeEndValue) {
+            isWithinRange = true;
+            break;
+          }
+        }
+
+        if (!isWithinRange) {
+          continue;
+        }
+
+        const busyTimes = availability.busy ?? [];
+        let hasConflict = false;
+        for (const busyTime of busyTimes) {
+          const busyStartValue = dayjs(busyTime.start).valueOf();
+          const busyEndValue = dayjs(busyTime.end).valueOf();
+          if (busyStartValue < slotEndValue && busyEndValue > slotStartValue) {
+            hasConflict = true;
+            break;
+          }
+        }
+
+        if (hasConflict) {
+          continue;
+        }
+
+        if (availability.user?.id) {
+          hostIds.push(availability.user.id);
+        }
+      }
+
+      availableHostsCache.set(cacheKey, hostIds);
+      return hostIds;
+    };
+
+    const filterSlotsForRoundRobin = (slots: typeof availableTimeSlots, holdCounts?: Map<string, number>) =>
+      slots
+        .map((slot) => {
+          const hostIds = getAvailableHostIdsForSlot(slot.time);
+          const holdCount = holdCounts?.get(slot.time.toISOString()) ?? 0;
+
+          if (hostIds.length <= holdCount) {
+            return undefined;
+          }
+
+          if (hostIds.length) {
+            slot.userIds = hostIds;
+          }
+
+          return slot;
+        })
+        .filter(
+          (
+            item:
+              | {
+                  time: dayjs.Dayjs;
+                  userIds?: number[] | undefined;
+                }
+              | undefined
+          ): item is {
+            time: dayjs.Dayjs;
+            userIds?: number[] | undefined;
+          } => {
+            return !!item;
+          }
+        );
 
     if (reservedSlots?.length > 0) {
       let occupiedSeats: typeof reservedSlots = reservedSlots.filter(
@@ -1263,41 +1370,55 @@ export class AvailableSlotsService {
 
         currentSeats = availabilityCheckProps.currentSeats;
       }
-      const busySlotsFromReservedSlots = reservedSlots.reduce<EventBusyDate[]>((r, c) => {
-        if (!c.isSeat) {
-          r.push({ start: c.slotUtcStartDate, end: c.slotUtcEndDate });
+      const nonSeatHoldCounts = reservedSlots.reduce<Map<string, number>>((acc, slot) => {
+        if (!slot.isSeat && slot.eventTypeId === eventType.id) {
+          const key = slot.slotUtcStartDate.toISOString();
+          acc.set(key, (acc.get(key) ?? 0) + 1);
         }
-        return r;
-      }, []);
+        return acc;
+      }, new Map<string, number>());
 
-      availableTimeSlots = availableTimeSlots
-        .map((slot) => {
-          if (
-            !checkForConflicts({
-              time: slot.time,
-              busy: busySlotsFromReservedSlots,
-              ...availabilityCheckProps,
-            })
-          ) {
-            return slot;
+      if (shouldComputeHostIds) {
+        availableTimeSlots = filterSlotsForRoundRobin(availableTimeSlots, nonSeatHoldCounts);
+      } else {
+        const busySlotsFromReservedSlots = reservedSlots.reduce<EventBusyDate[]>((r, c) => {
+          if (!c.isSeat) {
+            r.push({ start: c.slotUtcStartDate, end: c.slotUtcEndDate });
           }
-          return undefined;
-        })
-        .filter(
-          (
-            item:
-              | {
-                  time: dayjs.Dayjs;
-                  userIds?: number[] | undefined;
-                }
-              | undefined
-          ): item is {
-            time: dayjs.Dayjs;
-            userIds?: number[] | undefined;
-          } => {
-            return !!item;
-          }
-        );
+          return r;
+        }, []);
+
+        availableTimeSlots = availableTimeSlots
+          .map((slot) => {
+            if (
+              !checkForConflicts({
+                time: slot.time,
+                busy: busySlotsFromReservedSlots,
+                ...availabilityCheckProps,
+              })
+            ) {
+              return slot;
+            }
+            return undefined;
+          })
+          .filter(
+            (
+              item:
+                | {
+                    time: dayjs.Dayjs;
+                    userIds?: number[] | undefined;
+                  }
+                | undefined
+            ): item is {
+              time: dayjs.Dayjs;
+              userIds?: number[] | undefined;
+            } => {
+              return !!item;
+            }
+          );
+      }
+    } else if (shouldComputeHostIds) {
+      availableTimeSlots = filterSlotsForRoundRobin(availableTimeSlots);
     }
 
     // fr-CA uses YYYY-MM-DD
@@ -1305,7 +1426,7 @@ export class AvailableSlotsService {
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
-      timeZone: input.timeZone,
+      timeZone: effectiveBookerTimeZone,
     });
 
     function _mapSlotsToDate() {
@@ -1326,7 +1447,7 @@ export class AvailableSlotsService {
           r: Record<string, { time: string; attendees?: number; bookingUid?: string }[]>,
           { time, ...passThroughProps }
         ) => {
-          // This used to be _time.tz(input.timeZone) but Dayjs tz() is slow.
+          // This used to be _time.tz(effectiveBookerTimeZone) but Dayjs tz() is slow.
           // toLocaleDateString slugish, using Intl.DateTimeFormat we get the desired speed results.
           const dateString = formatter.format(time.toDate());
           const timeISO = time.toISOString();
@@ -1361,10 +1482,14 @@ export class AvailableSlotsService {
     // schedule is always expected to be set for an eventType now so it must never fallback to allUsersAvailability[0].timeZone(fallback is again legacy behavior)
     // TODO: Also, handleNewBooking only seems to be using eventType?.schedule?.timeZone which seems to confirm that we should simplify it as well.
     const eventTimeZone =
-      eventType.timeZone || eventType?.schedule?.timeZone || allUsersAvailability?.[0]?.timeZone;
+      eventType.timeZone ||
+      eventType?.schedule?.timeZone ||
+      allUsersAvailability?.[0]?.timeZone ||
+      defaultEventTimeZone;
 
+    const finalBookerTimeZone = effectiveBookerTimeZone || eventTimeZone || defaultEventTimeZone;
     const eventUtcOffset = getUTCOffsetByTimezone(eventTimeZone) ?? 0;
-    const bookerUtcOffset = input.timeZone ? getUTCOffsetByTimezone(input.timeZone) ?? 0 : 0;
+    const bookerUtcOffset = getUTCOffsetByTimezone(finalBookerTimeZone) ?? 0;
     const periodLimits = calculatePeriodLimits({
       periodType: eventType.periodType,
       periodDays: eventType.periodDays,

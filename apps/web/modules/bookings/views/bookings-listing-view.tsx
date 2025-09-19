@@ -5,6 +5,7 @@ import { useSearchParams, usePathname } from "next/navigation";
 import { useMemo, useRef } from "react";
 
 import dayjs from "@calcom/dayjs";
+import { DEFAULT_EVENT_TIME_ZONE } from "@calcom/lib/timezoneConstants";
 import {
   useDataTable,
   DataTableProvider,
@@ -283,13 +284,14 @@ function BookingsContent({ status }: BookingsProps) {
         cell: (props) => {
           if (props.row.original.type === "data") {
             const { booking, recurringInfo, isToday } = props.row.original;
+            const bookingTimeZone = booking.eventType?.timeZone || user?.timeZone || DEFAULT_EVENT_TIME_ZONE;
             return (
               <BookingListItem
                 key={booking.id}
                 isToday={isToday}
                 loggedInUser={{
                   userId: user?.id,
-                  userTimeZone: user?.timeZone,
+                  userTimeZone: bookingTimeZone,
                   userTimeFormat: user?.timeFormat,
                   userEmail: user?.email,
                 }}

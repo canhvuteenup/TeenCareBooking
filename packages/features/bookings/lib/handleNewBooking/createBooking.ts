@@ -7,7 +7,7 @@ import { isPrismaObjOrUndefined } from "@calcom/lib/isPrismaObj";
 import { withReporting } from "@calcom/lib/sentryWrapper";
 import prisma from "@calcom/prisma";
 import { Prisma } from "@calcom/prisma/client";
-import { BookingStatus } from "@calcom/prisma/enums";
+import { BookingStatus, SchedulingType } from "@calcom/prisma/enums";
 import type { CreationSource } from "@calcom/prisma/enums";
 import type { CalendarEvent } from "@calcom/types/Calendar";
 
@@ -109,7 +109,8 @@ const _createBooking = async ({
     bookingAndAssociatedData,
     originalRescheduledBooking,
     eventType.paymentAppData,
-    eventType.organizerUser
+    eventType.organizerUser,
+    eventType.eventTypeData?.schedulingType ?? null
   );
 
   function shouldConnectBookingToFormResponse() {
@@ -136,7 +137,8 @@ async function saveBooking(
   bookingAndAssociatedData: ReturnType<typeof buildNewBookingData>,
   originalRescheduledBooking: OriginalRescheduledBooking,
   paymentAppData: PaymentAppData,
-  organizerUser: CreateBookingParams["eventType"]["organizerUser"]
+  organizerUser: CreateBookingParams["eventType"]["organizerUser"],
+  eventSchedulingType?: SchedulingType | null
 ) {
   const { newBookingData, reroutingFormResponseUpdateData, originalBookingUpdateDataForCancellation } =
     bookingAndAssociatedData;
@@ -151,6 +153,8 @@ async function saveBooking(
     },
     data: newBookingData,
   };
+
+  const enforcePerHostConflict = eventSchedulingType === SchedulingType.ROUND_ROBIN;
 
   if (originalRescheduledBooking?.paid && originalRescheduledBooking?.payment) {
     const bookingPayment = originalRescheduledBooking.payment.find((payment) => payment.success);
@@ -172,18 +176,55 @@ async function saveBooking(
   /**
    * Reschedule(Cancellation + Creation) with an update of reroutingFormResponse should be atomic
    */
-  return prisma.$transaction(async (tx) => {
-    if (originalBookingUpdateDataForCancellation) {
-      await tx.booking.update(originalBookingUpdateDataForCancellation);
-    }
+  try {
+    return await prisma.$transaction(
+      async (tx) => {
+        if (originalBookingUpdateDataForCancellation) {
+          await tx.booking.update(originalBookingUpdateDataForCancellation);
+        }
 
-    const booking = await tx.booking.create(createBookingObj);
-    if (reroutingFormResponseUpdateData) {
-      await tx.app_RoutingForms_FormResponse.update(reroutingFormResponseUpdateData);
-    }
+        if (enforcePerHostConflict) {
+          const newBookingStart = createBookingObj.data.startTime;
+          const newBookingEnd = createBookingObj.data.endTime;
+          const conflictingBooking = await tx.booking.findFirst({
+            where: {
+              userId: organizerUser.id,
+              status: { in: [BookingStatus.ACCEPTED, BookingStatus.PENDING] },
+              startTime: { lt: newBookingEnd },
+              endTime: { gt: newBookingStart },
+            },
+            select: { id: true },
+          });
 
-    return booking;
-  });
+          if (conflictingBooking) {
+            throw new HttpError({
+              statusCode: 409,
+              message: "Slot is no longer available",
+            });
+          }
+        }
+
+        const booking = await tx.booking.create(createBookingObj);
+        if (reroutingFormResponseUpdateData) {
+          await tx.app_RoutingForms_FormResponse.update(reroutingFormResponseUpdateData);
+        }
+
+        return booking;
+      },
+      enforcePerHostConflict ? { isolationLevel: Prisma.TransactionIsolationLevel.Serializable } : undefined
+    );
+  } catch (error) {
+    if (error instanceof HttpError) {
+      throw error;
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") {
+      throw new HttpError({
+        statusCode: 409,
+        message: "Slot is no longer available",
+      });
+    }
+    throw error;
+  }
 }
 
 function getEventTypeRel(eventTypeId: EventTypeId) {
