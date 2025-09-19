@@ -328,10 +328,7 @@
         "NEXT_PUBLIC_PLAIN_CHAT_EXCLUDED_PATHS"
       ]
     },
-    "@calcom/web#dx": {
-      "cache": false,
-      "dependsOn": ["@calcom/prisma#dx"]
-    },
+
     "@calcom/web#start": {
       "cache": false,
       "dependsOn": []
@@ -402,11 +399,7 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**"]
     },
-    "db-deploy": {
-      "cache": false,
-      "inputs": ["./migrations/**/*.sql", "./prisma/migrations/**/*.sql"]
-    },
-    "db-seed": {},
+
     "deploy": {
       "cache": false,
       "dependsOn": ["@calcom/web#build"]
@@ -433,16 +426,7 @@
       "cache": false,
       "outputs": ["lint-results"]
     },
-    "post-install": {
-      "dependsOn": [],
-      "outputs": ["../../node_modules/@prisma/client/**", "../../node_modules/@prisma/admin-client/**"],
-      "inputs": ["./schema.prisma", "./prisma/schema.prisma"],
-      "env": ["PRISMA_GENERATE_DATAPROXY"]
-    },
-    "@calcom/prisma#post-install": {
-      "cache": false,
-      "outputs": ["dist/**", "build/**"]
-    },
+
     "start": {
       "outputs": ["dist/**", "build/**"]
     },
@@ -488,16 +472,7 @@
         "EMBED_PUBLIC_EMBED_VERSION"
       ]
     },
-    "embed-tests-update-snapshots:ci": {
-      "cache": false,
-      "dependsOn": [
-        "@calcom/prisma#db-seed",
-        "@calcom/web#build",
-        "^build",
-        "^embed-tests-update-snapshots:ci"
-      ],
-      "outputs": ["dist/**", "build/**"]
-    },
+
     "//#env-check:common": {
       "cache": false,
       "inputs": ["./.env.example", "./.env"],
