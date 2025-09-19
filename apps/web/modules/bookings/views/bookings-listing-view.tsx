@@ -46,6 +46,8 @@ type RecurringInfo = {
   bookings: { [key: string]: Date[] };
 };
 
+const DEFAULT_EVENT_TIME_ZONE = "Asia/Bangkok";
+
 const getBookingTimeZone = (booking: BookingOutput) => {
   const eventTimeZone = booking.eventType?.timeZone?.trim();
   return eventTimeZone ? eventTimeZone : DEFAULT_EVENT_TIME_ZONE;
