@@ -286,6 +286,10 @@
     "@calcom/trpc#build": {
       "outputs": ["./types"]
     },
+    "post-install": {
+      "cache": false
+    },
+
     "@calcom/web#build": {
       "dependsOn": ["^build"],
       "outputs": [".next/**"],

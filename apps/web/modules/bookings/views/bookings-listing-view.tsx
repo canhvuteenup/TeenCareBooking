@@ -5,7 +5,6 @@ import { useSearchParams, usePathname } from "next/navigation";
 import { useMemo, useRef } from "react";
 
 import dayjs from "@calcom/dayjs";
-import { DEFAULT_EVENT_TIME_ZONE } from "@calcom/lib/timezoneConstants";
 import {
   useDataTable,
   DataTableProvider,
@@ -45,6 +44,11 @@ type RecurringInfo = {
   count: number;
   firstDate: Date | null;
   bookings: { [key: string]: Date[] };
+};
+
+const getBookingTimeZone = (booking: BookingOutput) => {
+  const eventTimeZone = booking.eventType?.timeZone?.trim();
+  return eventTimeZone ? eventTimeZone : DEFAULT_EVENT_TIME_ZONE;
 };
 
 const descriptionByStatus: Record<BookingListingStatus, string> = {
@@ -155,7 +159,7 @@ function BookingsContent({ status }: BookingsProps) {
       href: queryString ? `${tabConfig.path}?${queryString}` : tabConfig.path,
       "data-testid": tabConfig["data-testid"],
     }));
-  }, [searchParams?.toString()]);
+  }, [searchParams]);
 
   const eventTypeIds = useFilterValue("eventTypeId", ZMultiSelectFilterValue)?.data as number[] | undefined;
   const teamIds = useFilterValue("teamId", ZMultiSelectFilterValue)?.data as number[] | undefined;
@@ -284,7 +288,7 @@ function BookingsContent({ status }: BookingsProps) {
         cell: (props) => {
           if (props.row.original.type === "data") {
             const { booking, recurringInfo, isToday } = props.row.original;
-            const bookingTimeZone = booking.eventType?.timeZone || user?.timeZone || DEFAULT_EVENT_TIME_ZONE;
+            const bookingTimeZone = getBookingTimeZone(booking);
             return (
               <BookingListItem
                 key={booking.id}
@@ -323,7 +327,9 @@ function BookingsContent({ status }: BookingsProps) {
   const flatData = useMemo<RowData[]>(() => {
     const shownBookings: Record<string, BookingOutput[]> = {};
     const filterBookings = (booking: BookingOutput) => {
-      if (status === "recurring" || status == "unconfirmed" || status === "cancelled") {
+      // Remove invalid template literals and fix logic
+      getBookingTimeZone(booking);
+      if (status === "recurring" || status === "unconfirmed" || status === "cancelled") {
         if (!booking.recurringEventId) {
           return true;
         }
@@ -336,6 +342,7 @@ function BookingsContent({ status }: BookingsProps) {
         }
         shownBookings[booking.recurringEventId] = [booking];
       } else if (status === "upcoming") {
+        // Only show bookings that are NOT today
         return (
           dayjs(booking.startTime).tz(user?.timeZone).format("YYYY-MM-DD") !==
           dayjs().tz(user?.timeZone).format("YYYY-MM-DD")
@@ -354,7 +361,7 @@ function BookingsContent({ status }: BookingsProps) {
         isToday: false,
       })) || []
     );
-  }, [query.data]);
+  }, [query.data, status, user]);
 
   const bookingsToday = useMemo<RowData[]>(() => {
     return (
@@ -373,7 +380,7 @@ function BookingsContent({ status }: BookingsProps) {
           isToday: true,
         })) ?? []
     );
-  }, [query.data]);
+  }, [query.data?.bookings, query.data?.recurringInfo, user?.timeZone]);
 
   const finalData = useMemo<RowData[]>(() => {
     if (status !== "upcoming") {

@@ -5,6 +5,7 @@ module.exports = {
   plugins: ["import"],
   rules: {
     "import/no-cycle": ["warn", { maxDepth: Infinity }],
+    "react-hooks/exhaustive-deps": "warn",
   },
   overrides: [
     {
@@ -28,7 +29,8 @@ module.exports = {
             patterns: [
               {
                 group: ["@calcom/trpc/*", "@trpc/*"],
-                message: "tRPC imports are blocked in packages/app-store. Move UI to apps/web/components/apps or introduce an API boundary.",
+                message:
+                  "tRPC imports are blocked in packages/app-store. Move UI to apps/web/components/apps or introduce an API boundary.",
                 allowTypeImports: false,
               },
             ],
