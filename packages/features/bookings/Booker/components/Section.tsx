@@ -1,6 +1,4 @@
-import type { MotionProps } from "framer-motion";
-import { m } from "framer-motion";
-import { forwardRef } from "react";
+import { forwardRef, type HTMLAttributes } from "react";
 
 import { useBookerStoreContext } from "@calcom/features/bookings/Booker/BookerStoreProvider";
 import classNames from "@calcom/ui/classNames";
@@ -25,7 +23,7 @@ type BookerSectionProps = {
   area: GridArea;
   visible?: boolean;
   className?: string;
-} & MotionProps;
+} & HTMLAttributes<HTMLDivElement>;
 
 // This map with strings is needed so Tailwind generates all classnames,
 // If we would concatenate them with JS, Tailwind would not generate them.
@@ -56,8 +54,8 @@ export const BookerSection = forwardRef<HTMLDivElement, BookerSectionProps>(func
   if (!visible && typeof visible !== "undefined") return null;
 
   return (
-    <m.div ref={ref} className={classNames(gridClassName, className)} layout {...props}>
+    <div ref={ref} className={classNames(gridClassName, className)} {...props}>
       {children}
-    </m.div>
+    </div>
   );
 });
