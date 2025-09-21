@@ -3369,7 +3369,6 @@ __metadata:
     framer-motion: ^10.12.8
     lexical: ^0.9.0
     react-select: ^5.7.0
-    react-sticky-box: ^2.0.4
     recharts: ^3.0.2
     stripe-event-types: ^3.1.0
     web-push: ^3.6.7
@@ -11525,6 +11524,15 @@ __metadata:
   peerDependencies:
     "@prisma/client": ">=4.16.1"
   checksum: 4344ecc3eb419dc0d6342e4111859941248c96715295058b3f8055ac8b5b03c04c958cbe01bf4deb6d981be4b742d24b2b408615a2409964ea4f2ef388c0332d
+  languageName: node
+  linkType: hard
+
+"@prisma/extension-accelerate@npm:^2.0.2":
+  version: 2.0.2
+  resolution: "@prisma/extension-accelerate@npm:2.0.2"
+  peerDependencies:
+    "@prisma/client": ">=4.16.1"
+  checksum: 62a5d0f459db7a316c674cfd8c18f9f4530fdaf7dcf630ce1b9808376a2c683a6176d5ed519e7116b8a2a973ff27cef12d76203650403358e57292cea5fcc9e4
   languageName: node
   linkType: hard
 
@@ -21672,6 +21680,7 @@ __metadata:
     "@jetstreamapp/soql-parser-js": ^6.1.0
     "@next/third-parties": ^14.2.5
     "@playwright/test": ^1.45.3
+    "@prisma/extension-accelerate": ^2.0.2
     "@snaplet/copycat": ^4.1.0
     "@testing-library/jest-dom": ^5.16.5
     "@testing-library/react": ^16.0.1
@@ -40733,15 +40742,6 @@ __metadata:
     react: ^16.8.0 || ^17.0.0 || ^18.0.0
     react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0
   checksum: c8398cc0aefb5ee5438b6176c86676e2d3fed7457c16b0769f423a0da0ae431a7df25c2cadf13b709700882b8ebd80a58b1e557fec3e22ad3cbf60164ca9e745
-  languageName: node
-  linkType: hard
-
-"react-sticky-box@npm:^2.0.4":
-  version: 2.0.4
-  resolution: "react-sticky-box@npm:2.0.4"
-  peerDependencies:
-    react: ">=16.8.0"
-  checksum: 6f6c1ab7b04851bcafce12cf9125d60d7944ff4f713ecfa53babb7695c6bfbb66d89a3e3cb040145a895a49a0fc9d47cf7325de3402a95f7fb16899ea96f2f80
   languageName: node
   linkType: hard
 

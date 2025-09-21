@@ -1,3 +1,5 @@
+import { withAccelerate } from "@prisma/extension-accelerate";
+
 import { PrismaClient, type Prisma } from "@calcom/prisma/client";
 
 import { bookingIdempotencyKeyExtension } from "./extensions/booking-idempotency-key";
@@ -34,7 +36,7 @@ if (!isNaN(loggerLevel)) {
   }
 }
 
-const baseClient = globalForPrisma.baseClient || new PrismaClient(prismaOptions);
+const baseClient = globalForPrisma.baseClient || new PrismaClient(prismaOptions).$extends(withAccelerate());
 
 export const customPrisma = (options?: Prisma.PrismaClientOptions) =>
   new PrismaClient({ ...prismaOptions, ...options })
