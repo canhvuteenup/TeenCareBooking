@@ -1,4 +1,3 @@
-import { m } from "framer-motion";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo } from "react";
 import { shallow } from "zustand/shallow";
@@ -19,7 +18,6 @@ import type { EventTypeTranslation } from "@calcom/prisma/client";
 import { EventTypeAutoTranslatedField } from "@calcom/prisma/enums";
 
 import i18nConfigration from "../../../../../i18n.json";
-import { fadeInUp } from "../config";
 import { FromToTime } from "../utils/dates";
 import { useBookerTime } from "./hooks/useBookerTime";
 
@@ -158,12 +156,12 @@ export const EventMeta = ({
   return (
     <div className={`${classNames?.eventMetaContainer || ""} relative z-10 p-6`} data-testid="event-meta">
       {isPending && (
-        <m.div {...fadeInUp} initial="visible" layout>
+        <div>
           <EventMetaSkeleton />
-        </m.div>
+        </div>
       )}
       {!isPending && !!event && (
-        <m.div {...fadeInUp} layout transition={{ ...fadeInUp.transition, delay: 0.3 }}>
+        <div>
           <EventMembers
             schedulingType={event.schedulingType}
             users={event.subsetOfUsers}
@@ -269,7 +267,7 @@ export const EventMeta = ({
             ) : null}
           </div>
           {children && <div className={classNames?.eventMetaChildren}>{children}</div>}
-        </m.div>
+        </div>
       )}
     </div>
   );
