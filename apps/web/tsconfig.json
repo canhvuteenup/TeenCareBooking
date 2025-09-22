@@ -8,13 +8,11 @@
       "@pages/*": ["pages/*"],
       "@lib/*": ["lib/*"],
       "@server/*": ["server/*"],
-      "@calcom/prisma": ["./lib/prismaDirectNoTx"],
-      "@prisma/client/*": ["@calcom/prisma/client/*"],
+      "@server/db/*": ["server/db/*"],
       "@calcom/repository/*": ["@calcom/lib/server/repository/*"]
+
     },
-    "plugins": [
-      { "name": "next" }
-    ],
+    "plugins": [{ "name": "next" }],
     "strictNullChecks": true,
     "experimentalDecorators": true
   },
