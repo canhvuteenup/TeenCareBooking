@@ -1,16 +1,18 @@
 import type short from "short-uuid";
 import type { z } from "zod";
 
+// cần cho Prisma.BookingCreateInput/JsonValue
 import type { routingFormResponseInDbSchema } from "@calcom/app-store/routing-forms/zod";
 import dayjs from "@calcom/dayjs";
 import { HttpError } from "@calcom/lib/http-error";
 import { isPrismaObjOrUndefined } from "@calcom/lib/isPrismaObj";
 import { withReporting } from "@calcom/lib/sentryWrapper";
-import prisma from "@calcom/prisma";
 import { Prisma } from "@calcom/prisma/client";
 import { BookingStatus, SchedulingType } from "@calcom/prisma/enums";
 import type { CreationSource } from "@calcom/prisma/enums";
 import type { CalendarEvent } from "@calcom/types/Calendar";
+
+import prismaDirectNoTx from "@server/lib/db/prismaDirectNoTx";
 
 import type { TgetBookingDataSchema } from "../getBookingDataSchema";
 import type { AwaitedBookingData, EventTypeId } from "./getBookingData";
@@ -65,13 +67,12 @@ function updateEventDetails(
 }
 
 async function getAssociatedBookingForFormResponse(formResponseId: number) {
-  const formResponse = await prisma.app_RoutingForms_FormResponse.findUnique({
+  const formResponse = await prismaDirectNoTx.app_RoutingForms_FormResponse.findUnique({
     where: { id: formResponseId },
   });
   return formResponse?.routedToBookingUid ?? null;
 }
 
-// Define the function with underscore prefix
 const _createBooking = async ({
   uid,
   reqBody,
@@ -114,10 +115,7 @@ const _createBooking = async ({
   );
 
   function shouldConnectBookingToFormResponse() {
-    const isRerouting = !!reroutingFormResponses;
-    // Rerouting: luôn gắn vào form response gốc
-    if (isRerouting) return true;
-    // Nếu đã có booking gắn form response này, thôi không gắn nữa
+    if (!!reroutingFormResponses) return true;
     if (associatedBookingForFormResponse) return false;
     return true;
   }
@@ -128,12 +126,12 @@ export const createBooking = withReporting(_createBooking, "createBooking");
 /**
  * NO-TRANSACTION VERSION
  * Thứ tự thao tác:
- *   (1) Hủy/cập nhật booking cũ (nếu là reschedule)
- *   (2) Kiểm tra conflict per-host (khi ROUND_ROBIN)
+ *   (1) Hủy/cập nhật booking cũ (nếu reschedule) — best effort
+ *   (2) Kiểm tra conflict per-host (ROUND_ROBIN)
  *   (3) Tạo booking mới
  *   (4) Cập nhật form response (nếu có)
  *
- * RỦI RO: Không "atomic" như Serializable. Nên thêm UNIQUE/idempotency để bịt race hiếm gặp.
+ * Lưu ý: không "atomic" như Serializable; nên có UNIQUE/idempotency để bịt race hiếm gặp.
  */
 async function saveBooking(
   bookingAndAssociatedData: ReturnType<typeof buildNewBookingData>,
@@ -145,7 +143,7 @@ async function saveBooking(
   const { newBookingData, reroutingFormResponseUpdateData, originalBookingUpdateDataForCancellation } =
     bookingAndAssociatedData;
 
-  const createBookingObj = {
+  const createBookingObj: Prisma.BookingCreateArgs = {
     include: {
       user: { select: { email: true, name: true, timeZone: true, username: true } },
       attendees: true,
@@ -167,7 +165,7 @@ async function saveBooking(
 
   // Nếu có giá > 0 thì đảm bảo credential tồn tại
   if (typeof paymentAppData.price === "number" && paymentAppData.price > 0) {
-    await prisma.credential.findFirstOrThrow({
+    await prismaDirectNoTx.credential.findFirstOrThrow({
       where: {
         appId: paymentAppData.appId,
         ...(paymentAppData.credentialId ? { id: paymentAppData.credentialId } : { userId: organizerUser.id }),
@@ -181,7 +179,7 @@ async function saveBooking(
   try {
     // (1) Hủy booking cũ nếu là reschedule (best-effort)
     if (originalBookingUpdateDataForCancellation) {
-      await prisma.booking.update(originalBookingUpdateDataForCancellation);
+      await prismaDirectNoTx.booking.update(originalBookingUpdateDataForCancellation);
       didCancelOriginal = true;
     }
 
@@ -189,7 +187,7 @@ async function saveBooking(
     if (enforcePerHostConflict) {
       const newBookingStart = (createBookingObj.data as Prisma.BookingCreateInput).startTime;
       const newBookingEnd = (createBookingObj.data as Prisma.BookingCreateInput).endTime;
-      const conflictingBooking = await prisma.booking.findFirst({
+      const conflictingBooking = await prismaDirectNoTx.booking.findFirst({
         where: {
           userId: organizerUser.id,
           status: { in: [BookingStatus.ACCEPTED, BookingStatus.PENDING] },
@@ -204,34 +202,25 @@ async function saveBooking(
     }
 
     // (3) Tạo booking mới
-    const booking = await prisma.booking.create(createBookingObj as any);
+    const booking = await prismaDirectNoTx.booking.create(createBookingObj);
 
     // (4) Cập nhật form response nếu có
     if (reroutingFormResponseUpdateData) {
-      await prisma.app_RoutingForms_FormResponse.update(reroutingFormResponseUpdateData);
+      await prismaDirectNoTx.app_RoutingForms_FormResponse.update(reroutingFormResponseUpdateData);
     }
 
     return booking;
-  } catch (error: unknown) {
-    // Map các lỗi về cùng semantics với bản dùng TX
+  } catch (error: any) {
+    // Map các lỗi về semantics cũ
     if (error instanceof HttpError) {
       await rollbackOriginalIfNeeded(didCancelOriginal, originalRescheduledBooking);
       throw error;
     }
-
-    // UNIQUE conflict (khuyến nghị bạn thêm các index phù hợp)
-    if (error?.code === "P2002") {
+    if (error?.code === "P2002" || error?.code === "P2034") {
       await rollbackOriginalIfNeeded(didCancelOriginal, originalRescheduledBooking);
       throw new HttpError({ statusCode: 409, message: "Slot is no longer available" });
     }
 
-    // P2034 (trước đây khi dùng TX Serializable) -> map về 409 cho UI
-    if (error?.code === "P2034") {
-      await rollbackOriginalIfNeeded(didCancelOriginal, originalRescheduledBooking);
-      throw new HttpError({ statusCode: 409, message: "Slot is no longer available" });
-    }
-
-    // Lỗi khác: cố gắng khôi phục booking cũ nếu đã hủy
     await rollbackOriginalIfNeeded(didCancelOriginal, originalRescheduledBooking);
     throw error;
   }
@@ -243,7 +232,7 @@ async function rollbackOriginalIfNeeded(
 ) {
   if (!didCancelOriginal || !originalRescheduledBooking?.id) return;
   try {
-    await prisma.booking.update({
+    await prismaDirectNoTx.booking.update({
       where: { id: originalRescheduledBooking.id },
       data: {
         rescheduled: false,
@@ -252,7 +241,7 @@ async function rollbackOriginalIfNeeded(
       },
     });
   } catch {
-    // nuốt lỗi rollback best-effort
+    // best-effort, bỏ qua lỗi
   }
 }
 
@@ -344,7 +333,7 @@ function buildNewBookingData(params: CreateBookingParams) {
       newBookingData.cancellationReason = input.rescheduleReason;
     }
 
-    // Reschedule logic with seats: chỉ giữ attendee là booker
+    // Seats: giữ đúng attendee booker khi reschedule
     if (
       newBookingData.attendees?.createMany?.data &&
       eventType?.eventTypeData?.seatsPerTimeSlot &&
