@@ -10724,22 +10724,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@prisma/client@npm:6.7.0":
-  version: 6.7.0
-  resolution: "@prisma/client@npm:6.7.0"
-  peerDependencies:
-    prisma: "*"
-    typescript: ">=5.1.0"
-  peerDependenciesMeta:
-    prisma:
-      optional: true
-    typescript:
-      optional: true
-  checksum: 8fd73c211482a63aa90af073e94ab523978e3524d9c1417197712b49ff02ec035622a83108e96b81214746bc9fd40a2daac52332dd013bdc26b834a8bb3ca74e
-  languageName: node
-  linkType: hard
-
-"@prisma/client@npm:^6.7.0":
+"@prisma/client@npm:6.16.2":
   version: 6.16.2
   resolution: "@prisma/client@npm:6.16.2"
   peerDependencies:
@@ -35942,7 +35927,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prisma@npm:^6.7.0":
+"prisma@npm:6.16.2":
   version: 6.16.2
   resolution: "prisma@npm:6.16.2"
   dependencies:
