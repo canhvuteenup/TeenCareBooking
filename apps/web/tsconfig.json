@@ -8,19 +8,17 @@
       "@pages/*": ["pages/*"],
       "@lib/*": ["lib/*"],
       "@server/*": ["server/*"],
+      "@calcom/prisma": ["./lib/prismaDirectNoTx"],
       "@prisma/client/*": ["@calcom/prisma/client/*"],
       "@calcom/repository/*": ["@calcom/lib/server/repository/*"]
     },
     "plugins": [
-      {
-        "name": "next"
-      }
+      { "name": "next" }
     ],
     "strictNullChecks": true,
     "experimentalDecorators": true
   },
   "include": [
-    /* Find a way to not require this - App files don't belong here. */
     "../../packages/app-store/routing-forms/env.d.ts",
     "next-env.d.ts",
     "../../packages/trpc/types/router.d.ts",
