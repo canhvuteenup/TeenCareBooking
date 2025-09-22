@@ -5,7 +5,7 @@ import { useIsPlatformBookerEmbed } from "@calcom/atoms/hooks/useIsPlatformBooke
 import dayjs from "@calcom/dayjs";
 import PoweredBy from "@calcom/ee/components/PoweredBy";
 import { useEmbedUiConfig } from "@calcom/embed-core/embed-iframe";
-import { updateEmbedBookerState } from "@calcom/embed-core/src/embed-iframe";
+import { updateEmbedBookerState } from "@calcom/features/bookings/Booker/utils/updateEmbedBookerState";
 import TurnstileCaptcha from "@calcom/features/auth/Turnstile";
 import { useBookerStoreContext } from "@calcom/features/bookings/Booker/BookerStoreProvider";
 import useSkipConfirmStep from "@calcom/features/bookings/Booker/components/hooks/useSkipConfirmStep";
