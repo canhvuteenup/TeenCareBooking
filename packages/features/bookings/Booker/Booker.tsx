@@ -1,6 +1,7 @@
+'use client'
 import { useEffect, useMemo, useRef } from "react";
 import { shallow } from "zustand/shallow";
-
+import { motion } from 'framer-motion'
 import { useIsPlatformBookerEmbed } from "@calcom/atoms/hooks/useIsPlatformBookerEmbed";
 import dayjs from "@calcom/dayjs";
 import PoweredBy from "@calcom/ee/components/PoweredBy";
@@ -545,7 +546,7 @@ const BookerComponent = ({
         )}
 
         {!hideBranding && (!isPlatform || isPlatformBookerEmbed) && !shouldRenderCaptcha && (
-          <m.span
+          <motion.span
             key="logo"
             className={classNames(
               "mb-6 mt-auto pt-6 [&_img]:h-[15px]",
@@ -553,7 +554,7 @@ const BookerComponent = ({
               layout === BookerLayouts.MONTH_VIEW ? "block" : "hidden"
             )}>
             <PoweredBy logoOnly hasValidLicense={hasValidLicense} />
-          </m.span>
+          </motion.span>
         )}
       </div>
       <>

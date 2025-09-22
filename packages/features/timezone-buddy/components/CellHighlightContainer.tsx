@@ -3,7 +3,7 @@
 import { LazyMotion, domAnimation, m } from "framer-motion";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useStore } from "zustand";
-
+import { motion } from 'framer-motion'
 import { DAY_CELL_WIDTH } from "../constants";
 import { TBContext } from "../store";
 
@@ -65,7 +65,7 @@ export function CellHighlightContainer({ children }: { children: React.ReactNode
         ref={componentContainerRef}>
         {children}
 
-        <m.div
+        <motion.div
           className="border-subtle pointer-events-none absolute left-0 top-0 h-full rounded-lg border-2 opacity-0"
           animate={{
             x: [null, x],
