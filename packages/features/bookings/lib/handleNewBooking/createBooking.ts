@@ -66,9 +66,7 @@ function updateEventDetails(
 
 async function getAssociatedBookingForFormResponse(formResponseId: number) {
   const formResponse = await prisma.app_RoutingForms_FormResponse.findUnique({
-    where: {
-      id: formResponseId,
-    },
+    where: { id: formResponseId },
   });
   return formResponse?.routedToBookingUid ?? null;
 }
@@ -88,6 +86,7 @@ const _createBooking = async ({
   tracking,
 }: CreateBookingParams & { rescheduledBy: string | undefined }) => {
   updateEventDetails(evt, originalRescheduledBooking);
+
   const associatedBookingForFormResponse = routingFormResponseId
     ? await getAssociatedBookingForFormResponse(routingFormResponseId)
     : null;
@@ -116,24 +115,26 @@ const _createBooking = async ({
 
   function shouldConnectBookingToFormResponse() {
     const isRerouting = !!reroutingFormResponses;
-
-    // During rerouting, we want to connect the new booking to the existing form response for booking being rescheduled(original booking)
-    if (isRerouting) {
-      return true;
-    }
-    // If not rerouting and there is already an associated booking for the form response, we don't want to connect the new booking to the form response
-    // We allow only the first booking to be connected to the form response
-    // Other bookings could happen due to user doing a booking by using browser back button to reach the same booking form with same query params and changing the time
-    // Such case isn't what the Routing Form redirected the user to, so we avoid this at the moment.
-    if (associatedBookingForFormResponse) {
-      return false;
-    }
+    // Rerouting: luôn gắn vào form response gốc
+    if (isRerouting) return true;
+    // Nếu đã có booking gắn form response này, thôi không gắn nữa
+    if (associatedBookingForFormResponse) return false;
     return true;
   }
 };
 
 export const createBooking = withReporting(_createBooking, "createBooking");
 
+/**
+ * NO-TRANSACTION VERSION
+ * Thứ tự thao tác:
+ *   (1) Hủy/cập nhật booking cũ (nếu là reschedule)
+ *   (2) Kiểm tra conflict per-host (khi ROUND_ROBIN)
+ *   (3) Tạo booking mới
+ *   (4) Cập nhật form response (nếu có)
+ *
+ * RỦI RO: Không "atomic" như Serializable. Nên thêm UNIQUE/idempotency để bịt race hiếm gặp.
+ */
 async function saveBooking(
   bookingAndAssociatedData: ReturnType<typeof buildNewBookingData>,
   originalRescheduledBooking: OriginalRescheduledBooking,
@@ -143,11 +144,10 @@ async function saveBooking(
 ) {
   const { newBookingData, reroutingFormResponseUpdateData, originalBookingUpdateDataForCancellation } =
     bookingAndAssociatedData;
+
   const createBookingObj = {
     include: {
-      user: {
-        select: { email: true, name: true, timeZone: true, username: true },
-      },
+      user: { select: { email: true, name: true, timeZone: true, username: true } },
       attendees: true,
       payment: true,
       references: true,
@@ -157,13 +157,15 @@ async function saveBooking(
 
   const enforcePerHostConflict = eventSchedulingType === SchedulingType.ROUND_ROBIN;
 
+  // Giữ payment reference khi reschedule có thanh toán thành công
   if (originalRescheduledBooking?.paid && originalRescheduledBooking?.payment) {
-    const bookingPayment = originalRescheduledBooking.payment.find((payment) => payment.success);
+    const bookingPayment = originalRescheduledBooking.payment.find((p) => p.success);
     if (bookingPayment) {
-      createBookingObj.data.payment = { connect: { id: bookingPayment.id } };
+      (createBookingObj.data as Prisma.BookingCreateInput).payment = { connect: { id: bookingPayment.id } };
     }
   }
 
+  // Nếu có giá > 0 thì đảm bảo credential tồn tại
   if (typeof paymentAppData.price === "number" && paymentAppData.price > 0) {
     await prisma.credential.findFirstOrThrow({
       where: {
@@ -174,57 +176,83 @@ async function saveBooking(
     });
   }
 
-  /**
-   * Reschedule(Cancellation + Creation) with an update of reroutingFormResponse should be atomic
-   */
+  let didCancelOriginal = false;
+
   try {
-    return await prisma.$transaction(
-      async (tx) => {
-        if (originalBookingUpdateDataForCancellation) {
-          await tx.booking.update(originalBookingUpdateDataForCancellation);
-        }
+    // (1) Hủy booking cũ nếu là reschedule (best-effort)
+    if (originalBookingUpdateDataForCancellation) {
+      await prisma.booking.update(originalBookingUpdateDataForCancellation);
+      didCancelOriginal = true;
+    }
 
-        if (enforcePerHostConflict) {
-          const newBookingStart = createBookingObj.data.startTime;
-          const newBookingEnd = createBookingObj.data.endTime;
-          const conflictingBooking = await tx.booking.findFirst({
-            where: {
-              userId: organizerUser.id,
-              status: { in: [BookingStatus.ACCEPTED, BookingStatus.PENDING] },
-              startTime: { lt: newBookingEnd },
-              endTime: { gt: newBookingStart },
-            },
-            select: { id: true },
-          });
+    // (2) Kiểm tra conflict per-host khi ROUND_ROBIN
+    if (enforcePerHostConflict) {
+      const newBookingStart = (createBookingObj.data as Prisma.BookingCreateInput).startTime;
+      const newBookingEnd = (createBookingObj.data as Prisma.BookingCreateInput).endTime;
+      const conflictingBooking = await prisma.booking.findFirst({
+        where: {
+          userId: organizerUser.id,
+          status: { in: [BookingStatus.ACCEPTED, BookingStatus.PENDING] },
+          startTime: { lt: newBookingEnd },
+          endTime: { gt: newBookingStart },
+        },
+        select: { id: true },
+      });
+      if (conflictingBooking) {
+        throw new HttpError({ statusCode: 409, message: "Slot is no longer available" });
+      }
+    }
 
-          if (conflictingBooking) {
-            throw new HttpError({
-              statusCode: 409,
-              message: "Slot is no longer available",
-            });
-          }
-        }
+    // (3) Tạo booking mới
+    const booking = await prisma.booking.create(createBookingObj as any);
 
-        const booking = await tx.booking.create(createBookingObj);
-        if (reroutingFormResponseUpdateData) {
-          await tx.app_RoutingForms_FormResponse.update(reroutingFormResponseUpdateData);
-        }
+    // (4) Cập nhật form response nếu có
+    if (reroutingFormResponseUpdateData) {
+      await prisma.app_RoutingForms_FormResponse.update(reroutingFormResponseUpdateData);
+    }
 
-        return booking;
-      },
-      enforcePerHostConflict ? { isolationLevel: Prisma.TransactionIsolationLevel.Serializable } : undefined
-    );
-  } catch (error) {
+    return booking;
+  } catch (error: unknown) {
+    // Map các lỗi về cùng semantics với bản dùng TX
     if (error instanceof HttpError) {
+      await rollbackOriginalIfNeeded(didCancelOriginal, originalRescheduledBooking);
       throw error;
     }
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034") {
-      throw new HttpError({
-        statusCode: 409,
-        message: "Slot is no longer available",
-      });
+
+    // UNIQUE conflict (khuyến nghị bạn thêm các index phù hợp)
+    if (error?.code === "P2002") {
+      await rollbackOriginalIfNeeded(didCancelOriginal, originalRescheduledBooking);
+      throw new HttpError({ statusCode: 409, message: "Slot is no longer available" });
     }
+
+    // P2034 (trước đây khi dùng TX Serializable) -> map về 409 cho UI
+    if (error?.code === "P2034") {
+      await rollbackOriginalIfNeeded(didCancelOriginal, originalRescheduledBooking);
+      throw new HttpError({ statusCode: 409, message: "Slot is no longer available" });
+    }
+
+    // Lỗi khác: cố gắng khôi phục booking cũ nếu đã hủy
+    await rollbackOriginalIfNeeded(didCancelOriginal, originalRescheduledBooking);
     throw error;
+  }
+}
+
+async function rollbackOriginalIfNeeded(
+  didCancelOriginal: boolean,
+  originalRescheduledBooking: OriginalRescheduledBooking
+) {
+  if (!didCancelOriginal || !originalRescheduledBooking?.id) return;
+  try {
+    await prisma.booking.update({
+      where: { id: originalRescheduledBooking.id },
+      data: {
+        rescheduled: false,
+        status: originalRescheduledBooking.status ?? BookingStatus.ACCEPTED,
+        rescheduledBy: null,
+      },
+    });
+  } catch {
+    // nuốt lỗi rollback best-effort
   }
 }
 
@@ -233,10 +261,7 @@ function getEventTypeRel(eventTypeId: EventTypeId) {
 }
 
 function getAttendeesData(evt: Pick<CalendarEvent, "attendees" | "team">) {
-  //if attendee is team member, it should fetch their locale not booker's locale
-  //perhaps make email fetch request to see if his locale is stored, else
   const teamMembers = evt?.team?.members ?? [];
-
   return evt.attendees.concat(teamMembers).map((attendee) => ({
     name: attendee.name,
     email: attendee.email,
@@ -284,26 +309,17 @@ function buildNewBookingData(params: CreateBookingParams) {
     smsReminderNumber: input.smsReminderNumber,
     metadata: reqBody.metadata,
     attendees: {
-      createMany: {
-        data: attendeesData,
-      },
+      createMany: { data: attendeesData },
     },
     dynamicEventSlugRef: !eventType.id ? eventType.slug : null,
     dynamicGroupSlugRef: !eventType.id ? (reqBody.user as string).toLowerCase() : null,
     iCalUID: evt.iCalUID ?? "",
     iCalSequence: originalRescheduledBooking ? evt.iCalSequence || 1 : 0,
-    user: {
-      connect: {
-        id: eventType.organizerUser.id,
-      },
-    },
+    user: { connect: { id: eventType.organizerUser.id } },
     destinationCalendar:
       evt.destinationCalendar && evt.destinationCalendar.length > 0
-        ? {
-            connect: { id: evt.destinationCalendar[0].id },
-          }
+        ? { connect: { id: evt.destinationCalendar[0].id } }
         : undefined,
-
     routedFromRoutingFormReponse: routingFormResponseId
       ? { connect: { id: routingFormResponseId } }
       : undefined,
@@ -327,7 +343,8 @@ function buildNewBookingData(params: CreateBookingParams) {
     if (originalRescheduledBooking.uid) {
       newBookingData.cancellationReason = input.rescheduleReason;
     }
-    // Reschedule logic with booking with seats
+
+    // Reschedule logic with seats: chỉ giữ attendee là booker
     if (
       newBookingData.attendees?.createMany?.data &&
       eventType?.eventTypeData?.seatsPerTimeSlot &&
@@ -344,9 +361,7 @@ function buildNewBookingData(params: CreateBookingParams) {
 
     if (!evt.seatsPerTimeSlot && originalRescheduledBooking?.uid) {
       originalBookingUpdateDataForCancellation = {
-        where: {
-          id: originalRescheduledBooking.id,
-        },
+        where: { id: originalRescheduledBooking.id },
         data: {
           rescheduled: true,
           status: BookingStatus.CANCELLED,
@@ -369,19 +384,11 @@ function buildNewBookingData(params: CreateBookingParams) {
     reroutingFormResponses: z.infer<typeof routingFormResponseInDbSchema> | null;
     routingFormResponseId: number | undefined | null;
   }) {
-    if (!routingFormResponseId) {
-      return null;
-    }
-
-    if (!reroutingFormResponses) {
-      return null;
-    }
-
+    if (!routingFormResponseId) return null;
+    if (!reroutingFormResponses) return null;
     return {
       where: { id: routingFormResponseId },
-      data: {
-        response: reroutingFormResponses,
-      },
+      data: { response: reroutingFormResponses },
     };
   }
 }
